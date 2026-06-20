@@ -25,6 +25,7 @@ def flash_fwd_kernel(
     Nq, Nk, scale,
     B_q: tl.constexpr, B_k: tl.constexpr, d: tl.constexpr,  # 타일크기/model 차원은 컴파일 타임 상수
     is_causal: tl.constexpr,
+    out_dtype: tl.constexpr,
 ):
     tile_q = tl.program_id(0)   # 몇 번째 쿼리 타일
     batch  = tl.program_id(1)   # 몇 번째 배치
@@ -99,15 +100,21 @@ def flash_fwd_kernel(
         block_shape=(B_q, d), 
         order=(1, 0),
     )
-    tl.store(O_blk, O_i.to(tl.float16), boundary_check=(0,))
+    tl.store(O_blk, O_i.to(out_dtype), boundary_check=(0,))
 
-    l_offs = q_start + tl.arange(0, B_q)
-    tl.store(L_ptr + batch * stride_lb + l_offs * stride_lq, L_i, mask=l_offs < Nq)
+    L_blk = tl.make_block_ptr(
+        L_ptr + batch * stride_lb,
+        shape=(Nq,),
+        strides=(stride_lq,),
+        offsets=(q_start,),
+        block_shape=(B_q,),
+        order=(0,),
+    )
+    tl.store(L_blk, L_i, boundary_check=(0,))
 
 
-# ──────────────────────────────────────────────
+
 # Triton autograd.Function
-# ──────────────────────────────────────────────
 
 class FlashAttentionTriton(torch.autograd.Function):
     @staticmethod
@@ -122,17 +129,27 @@ class FlashAttentionTriton(torch.autograd.Function):
         L = torch.zeros(B, Nq, device=q.device, dtype=torch.float32)
 
         grid = (triton.cdiv(Nq, B_q), B)   # (쿼리 타일 수, 배치 크기)
+        # 이 grid를 기반으로, flash_fwd_kernel이 (쿼리 타일 수 * 배치 크기) 만큼 병렬로 실행됨
+        # cdiv = ceiling division. 나눗셈을 올림을 해서, 타일 갯수 맞추기
 
-        flash_fwd_kernel[grid](
-            q, k, v, O, L,
-            q.stride(0), q.stride(1), q.stride(2),
+    
+        triton_dtype = {
+            torch.float32: tl.float32,
+            torch.float16: tl.float16,
+            torch.bfloat16: tl.bfloat16,
+        }[q.dtype]
+
+        flash_fwd_kernel[grid](                     # 인자로 넘기는 것의 종류가 4개
+            q, k, v, O, L,                          # 1. 텐서 자체
+            q.stride(0), q.stride(1), q.stride(2),  # 2. stride
             k.stride(0), k.stride(1), k.stride(2),
             v.stride(0), v.stride(1), v.stride(2),
             O.stride(0), O.stride(1), O.stride(2),
             L.stride(0), L.stride(1),
-            Nq, Nk, scale,
-            B_q=B_q, B_k=B_k, d=d,
+            Nq, Nk, scale,                          # 3. 일반 런타임 값
+            B_q=B_q, B_k=B_k, d=d,                  # 4. 컴파일 타임 상수. constexpr
             is_causal=is_causal,
+            out_dtype=triton_dtype,
         )
 
         ctx.save_for_backward(q, k, v, O, L)
@@ -142,6 +159,8 @@ class FlashAttentionTriton(torch.autograd.Function):
     @staticmethod
     def backward(ctx, dO: Tensor):
         # PyTorch 버전 backward 재사용 (recomputation 기반)
+        # 왜? forward는 online softmax 때문에 Triton의 이득이 크지만, 
+        # backward는 softmax gradient 계산이 병렬화 가능해서, non-tricky. Triton의 이득이 크지 않음
         q, k, v, O, L = ctx.saved_tensors
         return FlashAttentionPyTorch.backward(ctx, dO)
 
