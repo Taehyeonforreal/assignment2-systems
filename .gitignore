@@ -2,6 +2,15 @@
 cs336-spring2024-assignment-2-submission.zip
 test_results.xml
 
+# 개인 메모 / 강의 요약
+CLAUDE.md
+AGENTS.md
+A2_OVERVIEW.md
+Lecture5_GPUs_Summary.md
+Lecture6_Kernels_Summary.md
+Lecture7_Parallelism_Summary.md
+Lecture8_Parallelism_Code_Summary.md
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
