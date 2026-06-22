@@ -40,7 +40,7 @@ def flash_fwd_kernel(
         block_shape=(B_q, d),           # 그 창문의 크기
         order=(1, 0),
     )
-    Q_i = tl.load(Q_blk, boundary_check=(0,)).to(tl.float32)  # SRAM으로 이동
+    Q_i = tl.load(Q_blk, boundary_check=(0,))  # SRAM으로 이동 (fp16/bf16 유지 → Tensor Core 사용)
 
     # 온칩 버퍼 — SRAM에 상주하면서 키 타일 루프 내내 업데이트
     O_i = tl.zeros((B_q, d), dtype=tl.float32)
@@ -70,7 +70,7 @@ def flash_fwd_kernel(
         K_j = tl.load(K_blk, boundary_check=(0,))  # SRAM으로 이동
         V_j = tl.load(V_blk, boundary_check=(0,))  # SRAM으로 이동
 
-        S_ij = tl.dot(Q_i, tl.trans(K_j).to(tl.float32), out_dtype=tl.float32) * scale  # (B_q, B_k)
+        S_ij = tl.dot(Q_i, tl.trans(K_j), out_dtype=tl.float32) * scale  # (B_q, B_k) fp16@fp16→fp32, Tensor Core
 
         if is_causal:
             q_idx = (q_start + tl.arange(0, B_q))[:, None] # (B_q, 1)
