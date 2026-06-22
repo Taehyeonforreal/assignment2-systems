@@ -122,7 +122,7 @@ class FlashAttentionTriton(torch.autograd.Function):
         assert HAS_TRITON, "Triton이 설치되지 않았습니다"
         B, Nq, d = q.shape
         Nk = k.shape[1]
-        B_q, B_k = 32, 32
+        B_q, B_k = 64, 64
         scale = d ** -0.5
 
         O = torch.zeros_like(q)
@@ -171,8 +171,8 @@ class FlashAttentionPyTorch(torch.autograd.Function):
         B, Nq, d = q.shape
         Nk = k.shape[1]
         scale = d ** -0.5
-        B_q, B_k = 32, 32
-        # let tile size 32, 32
+        B_q, B_k = 64, 64
+        # let tile size 64, 64
 
         O = torch.zeros(B, Nq, d, device=q.device, dtype=q.dtype) # for ouput
         L = torch.zeros(B, Nq, device=q.device, dtype=torch.float32) # logsumexp, for backward
